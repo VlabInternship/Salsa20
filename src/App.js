@@ -15,12 +15,23 @@ import {
 // --- Helper Components for Detailed Visualizations ---
 const CoreMixingVisualizer = ({ currentStep, roundType, currentRoundNum, highlightedIndices }) => {
   if (currentStep !== 1) return null;
-  const roundName = roundType.charAt(0).toUpperCase() + roundType.slice(1);
+  
+  let displayText;
+  if (roundType === 'initial') {
+    displayText = "Initial State - Ready for Mixing";
+  } else if (roundType === 'column') {
+    displayText = `Column Round ${currentRoundNum}/10 - Completed`;
+  } else if (roundType === 'diagonal') {
+    displayText = `Diagonal Round ${currentRoundNum}/10 - Completed`;
+  } else {
+    displayText = "Mixing Process";
+  }
+  
   return (
     <div>
       <h3 className="text-lg font-semibold text-cyan-600 mb-4">Core Mixing Pattern</h3>
       <div className="bg-gray-50 border border-gray-200 p-4 rounded-lg">
-        <p className="text-center font-mono mb-3 text-orange-600">Round {currentRoundNum}/10: {roundName} Round</p>
+        <p className="text-center font-mono mb-3 text-orange-600">{displayText}</p>
         <div className="grid grid-cols-4 gap-2 w-full max-w-xs mx-auto">
           {Array.from({ length: 16 }).map((_, i) => {
             const isHighlighted = highlightedIndices.includes(i);
@@ -242,10 +253,8 @@ const Salsa20Interactive = () => {
   const [key, setKey] = useState("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
   const [nonce, setNonce] = useState("0000000000000000");
   const [output, setOutput] = useState("");
-  const [isAnimating, setIsAnimating] = useState(false);
   const [currentStep, setCurrentStep] = useState(-1);
   const [matrix, setMatrix] = useState([]);
-  const [animationSpeed, setAnimationSpeed] = useState(800);
   const [isDecrypting, setIsDecrypting] = useState(false);
  
   // State for detailed visualizations
@@ -259,7 +268,7 @@ const Salsa20Interactive = () => {
   const [ciphertextBytesForViz, setCiphertextBytesForViz] = useState([]);
  
   // Ref to correctly handle animation interruption
-  const isAnimatingRef = useRef(false);
+  // (keeping for potential future use, though not needed for manual navigation)
 
   const CONSTANTS = [0x61707865, 0x3320646e, 0x79622d32, 0x6b206574];
 
@@ -317,135 +326,254 @@ const Salsa20Interactive = () => {
     return newMatrix;
   };
 
-  // --- Animation Logic ---
-  const animateProcess = async (decrypt = false) => {
-    isAnimatingRef.current = true;
-    setIsAnimating(true);
-    setIsDecrypting(decrypt);
-    resetVisualization(false); // Soft reset without stopping animation
+  // --- Step Navigation Logic ---
+  // State to store computed values for each step
+  const [stepData, setStepData] = useState({
+    initialMatrix: [],
+    mixedMatrix: [],
+    finalMatrix: [],
+    keystreamBytes: [],
+    inputBytes: [],
+    resultBytes: [],
+    mixingStates: [] // Array of all 20 mixing round states
+  });
+  
+  // State for manual mixing round navigation
+  const [currentMixingRound, setCurrentMixingRound] = useState(0);
 
+  // Function to execute the complete algorithm and store intermediate results
+  const computeAllSteps = (decrypt = false) => {
     // Step 0: Initialize Matrix
-    setCurrentStep(0);
     const initialMatrix = initMatrix(0);
-    setInitialStateForViz(initialMatrix);
     let workingMatrix = [...initialMatrix];
-    setMatrix(workingMatrix);
-    if (!isAnimatingRef.current) return;
-    await new Promise((resolve) => setTimeout(resolve, animationSpeed));
 
-    // Step 1: Animate the mixing rounds
-    setCurrentStep(1);
-    const subRoundTime = Math.max(50, (animationSpeed * 1.5) / 80);
+    // Step 1: Mix State (20 Rounds) - Store all intermediate states
     const columnGroups = [[0, 4, 8, 12], [1, 5, 9, 13], [2, 6, 10, 14], [3, 7, 11, 15]];
     const diagonalGroups = [[0, 5, 10, 15], [1, 6, 11, 12], [2, 7, 8, 13], [3, 4, 9, 14]];
+    const mixingStates = [];
+    
+    // Store initial state as round 0
+    mixingStates.push([...workingMatrix]);
 
     for (let i = 0; i < 10; i++) {
-      if (!isAnimatingRef.current) return;
-      setCurrentRoundNum(i + 1);
-     
-      setRoundType('column');
+      // Column rounds
       for (const group of columnGroups) {
-        if (!isAnimatingRef.current) return;
-        setHighlightedIndices(group);
         [workingMatrix[group[0]], workingMatrix[group[1]], workingMatrix[group[2]], workingMatrix[group[3]]] = 
           quarterRound(workingMatrix[group[0]], workingMatrix[group[1]], workingMatrix[group[2]], workingMatrix[group[3]]);
-        setMatrix([...workingMatrix]);
-        await new Promise(r => setTimeout(r, subRoundTime));
       }
-
-      setRoundType('diagonal');
+      mixingStates.push([...workingMatrix]); // Store state after column round
+      
+      // Diagonal rounds
       for (const group of diagonalGroups) {
-        if (!isAnimatingRef.current) return;
-        setHighlightedIndices(group);
         [workingMatrix[group[0]], workingMatrix[group[1]], workingMatrix[group[2]], workingMatrix[group[3]]] = 
           quarterRound(workingMatrix[group[0]], workingMatrix[group[1]], workingMatrix[group[2]], workingMatrix[group[3]]);
-        setMatrix([...workingMatrix]);
-        await new Promise(r => setTimeout(r, subRoundTime));
       }
+      mixingStates.push([...workingMatrix]); // Store state after diagonal round
     }
-    setMixedStateForViz([...workingMatrix]);
-    setHighlightedIndices([]);
+    const mixedMatrix = [...workingMatrix];
 
-    // Step 2: Animate adding initial state
-    if (!isAnimatingRef.current) return;
-    setCurrentStep(2);
-    for (let i = 0; i < 16; i++) { workingMatrix[i] = (workingMatrix[i] + initialMatrix[i]) >>> 0; }
-    setMatrix([...workingMatrix]);
-    await new Promise((resolve) => setTimeout(resolve, animationSpeed));
+    // Step 2: Add Initial State
+    for (let i = 0; i < 16; i++) { 
+      workingMatrix[i] = (workingMatrix[i] + initialMatrix[i]) >>> 0; 
+    }
+    const finalMatrix = [...workingMatrix];
 
-    // Step 3: Animate serialization to keystream
-    if (!isAnimatingRef.current) return;
-    setCurrentStep(3);
+    // Step 3: Serialize to Keystream
     const keystream = workingMatrix;
-    const finalKeystreamBytes = [];
+    const keystreamBytes = [];
     for (let j = 0; j < 16; j++) {
-      finalKeystreamBytes.push(keystream[j] & 0xff, (keystream[j] >>> 8) & 0xff, (keystream[j] >>> 16) & 0xff, (keystream[j] >>> 24) & 0xff);
+      keystreamBytes.push(keystream[j] & 0xff, (keystream[j] >>> 8) & 0xff, (keystream[j] >>> 16) & 0xff, (keystream[j] >>> 24) & 0xff);
     }
-    setKeystreamBytesForViz(finalKeystreamBytes.slice(0, 64));
-    await new Promise((resolve) => setTimeout(resolve, animationSpeed));
+    const finalKeystreamBytes = keystreamBytes.slice(0, 64);
 
-    // Step 4: Animate XOR operation
-    if (!isAnimatingRef.current) return;
-    setCurrentStep(4);
-    
+    // Step 4: XOR Operation
     let inputBytes;
     if (decrypt) {
-      // For decryption, input is hex ciphertext - only process the actual hex characters
       const cleanHex = input.replace(/[^0-9a-f]/gi, '');
-      // Only take as many bytes as we have hex characters for (each byte = 2 hex chars)
       const maxBytes = Math.floor(cleanHex.length / 2);
       inputBytes = hexToBytes(cleanHex.slice(0, maxBytes * 2));
     } else {
-      // For encryption, input is plaintext string
       inputBytes = stringToBytes(input);
     }
     
-    // Ensure we don't exceed keystream length
     const bytesToProcess = Math.min(inputBytes.length, finalKeystreamBytes.length);
     const resultBytes = inputBytes.slice(0, bytesToProcess).map((byte, i) => byte ^ finalKeystreamBytes[i]);
-    
-    setPlaintextBytesForViz(inputBytes);
-    setCiphertextBytesForViz(resultBytes);
-    
-    if (decrypt) {
-      // For decryption, convert XORed bytes back to string
-      try {
-        // Convert bytes to string, but only the actual decrypted length
-        const decryptedText = bytesToString(resultBytes);
-        
-        // Clean up the text by removing control characters but keeping normal whitespace
-        const cleanText = decryptedText.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '');
-        setOutput(cleanText.trim()); // Trim any leading/trailing whitespace
-      } catch (error) {
-        // If conversion fails, show as hex
-        setOutput(bytesToHex(resultBytes));
-      }
-    } else {
-      setOutput(bytesToHex(resultBytes));
-    }
-    
-    await new Promise((resolve) => setTimeout(resolve, animationSpeed));
-   
-    isAnimatingRef.current = false;
-    setIsAnimating(false);
+
+    // Store all computed data
+    setStepData({
+      initialMatrix,
+      mixedMatrix,
+      finalMatrix,
+      keystreamBytes: finalKeystreamBytes,
+      inputBytes,
+      resultBytes,
+      mixingStates
+    });
+
+    return { initialMatrix, mixedMatrix, finalMatrix, keystreamBytes: finalKeystreamBytes, inputBytes, resultBytes, decrypt, mixingStates };
   };
- 
-  const resetVisualization = (stopAnim = true) => {
-    if (stopAnim) {
-        isAnimatingRef.current = false;
-        setIsAnimating(false);
+
+  // Function to navigate to a specific step
+  const navigateToStep = (stepIndex) => {
+    setCurrentStep(stepIndex);
+    
+    // Compute all steps if not already done or if decrypt mode changed
+    const computed = computeAllSteps(isDecrypting);
+    
+    // Set visualization state based on the current step
+    switch (stepIndex) {
+      case 0: // Initialize State
+        setMatrix(computed.initialMatrix);
+        setInitialStateForViz(computed.initialMatrix);
+        setMixedStateForViz([]);
+        setKeystreamBytesForViz([]);
+        setPlaintextBytesForViz([]);
+        setCiphertextBytesForViz([]);
+        setOutput("");
+        setHighlightedIndices([]);
+        setRoundType('');
+        setCurrentRoundNum(0);
+        break;
+        
+      case 1: // Mix State (20 Rounds)
+        // Reset to first mixing round when entering step 1 (unless already set)
+        if (currentMixingRound >= computed.mixingStates.length) {
+          setCurrentMixingRound(0);
+        }
+        
+        // Show the current mixing round state
+        const roundIndex = currentMixingRound < computed.mixingStates.length ? currentMixingRound : 0;
+        const currentState = computed.mixingStates[roundIndex] || computed.initialMatrix;
+        setMatrix(currentState);
+        setInitialStateForViz(computed.initialMatrix);
+        setMixedStateForViz(computed.mixedMatrix);
+        setKeystreamBytesForViz([]);
+        setPlaintextBytesForViz([]);
+        setCiphertextBytesForViz([]);
+        setOutput("");
+        setHighlightedIndices([]);
+        
+        // Show which round type we're in
+        if (roundIndex === 0) {
+          setRoundType('initial');
+          setCurrentRoundNum(0);
+        } else if (roundIndex % 2 === 1) {
+          setRoundType('column');
+          setCurrentRoundNum(Math.ceil(roundIndex / 2));
+        } else {
+          setRoundType('diagonal');
+          setCurrentRoundNum(roundIndex / 2);
+        }
+        break;
+        
+      case 2: // Add Initial State
+        setMatrix(computed.finalMatrix);
+        setInitialStateForViz(computed.initialMatrix);
+        setMixedStateForViz(computed.mixedMatrix);
+        setKeystreamBytesForViz([]);
+        setPlaintextBytesForViz([]);
+        setCiphertextBytesForViz([]);
+        setOutput("");
+        setHighlightedIndices([]);
+        setRoundType('');
+        setCurrentRoundNum(0);
+        break;
+        
+      case 3: // Serialize to Keystream
+        setMatrix(computed.finalMatrix);
+        setInitialStateForViz(computed.initialMatrix);
+        setMixedStateForViz(computed.mixedMatrix);
+        setKeystreamBytesForViz(computed.keystreamBytes);
+        setPlaintextBytesForViz([]);
+        setCiphertextBytesForViz([]);
+        setOutput("");
+        setHighlightedIndices([]);
+        setRoundType('');
+        setCurrentRoundNum(0);
+        break;
+        
+      case 4: // XOR Operation
+        setMatrix(computed.finalMatrix);
+        setInitialStateForViz(computed.initialMatrix);
+        setMixedStateForViz(computed.mixedMatrix);
+        setKeystreamBytesForViz(computed.keystreamBytes);
+        setPlaintextBytesForViz(computed.inputBytes);
+        setCiphertextBytesForViz(computed.resultBytes);
+        setHighlightedIndices([]);
+        setRoundType('');
+        setCurrentRoundNum(0);
+        
+        // Set output
+        if (computed.decrypt) {
+          try {
+            const decryptedText = bytesToString(computed.resultBytes);
+            const cleanText = decryptedText.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '');
+            setOutput(cleanText.trim());
+          } catch (error) {
+            setOutput(bytesToHex(computed.resultBytes));
+          }
+        } else {
+          setOutput(bytesToHex(computed.resultBytes));
+        }
+        break;
+        
+      default:
+        setCurrentStep(-1);
+        resetVisualization(false);
+        break;
     }
+  };
+
+  // Function to start the process (just navigate to step 0)
+  const startProcess = (decrypt = false) => {
+    setIsDecrypting(decrypt);
+    setCurrentMixingRound(0); // Reset mixing round navigation
+    navigateToStep(0);
+  };
+
+  // Function to navigate within mixing rounds (for step 1)
+  const navigateToMixingRound = (roundIndex) => {
+    setCurrentMixingRound(roundIndex);
+    if (currentStep === 1 && stepData.mixingStates.length > 0) {
+      // Update the matrix to show the current mixing round state
+      const currentState = stepData.mixingStates[roundIndex] || stepData.initialMatrix;
+      setMatrix(currentState);
+      
+      // Update round type and number based on the round index
+      if (roundIndex === 0) {
+        setRoundType('initial');
+        setCurrentRoundNum(0);
+      } else if (roundIndex % 2 === 1) {
+        setRoundType('column');
+        setCurrentRoundNum(Math.ceil(roundIndex / 2));
+      } else {
+        setRoundType('diagonal');
+        setCurrentRoundNum(roundIndex / 2);
+      }
+    }
+  };
+  const resetVisualization = () => {
     setOutput(""); 
     setCurrentStep(-1); 
     setMatrix([]);
-    setRoundType(''); 
-    setCurrentRoundNum(0); 
+    setRoundType('');
+    setCurrentRoundNum(0);
+    setCurrentMixingRound(0); // Reset mixing round navigation
     setHighlightedIndices([]);
-    setInitialStateForViz([]); 
+    setInitialStateForViz([]);
     setMixedStateForViz([]);
-    setKeystreamBytesForViz([]); 
-    setPlaintextBytesForViz([]); 
+    setKeystreamBytesForViz([]);
+    setPlaintextBytesForViz([]);
     setCiphertextBytesForViz([]);
+    setStepData({
+      initialMatrix: [],
+      mixedMatrix: [],
+      finalMatrix: [],
+      keystreamBytes: [],
+      inputBytes: [],
+      resultBytes: [],
+      mixingStates: []
+    });
   };
 
   const steps = ["Initialize State", "Mix State (20 Rounds)", "Add Initial State", "Serialize to Keystream", "XOR Operation"];
@@ -513,33 +641,20 @@ const Salsa20Interactive = () => {
                         maxLength="16" 
                       />
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Animation Speed</label>
-                      <input 
-                        type="range" 
-                        min="200" 
-                        max="2000" 
-                        step="100" 
-                        value={animationSpeed} 
-                        onChange={(e) => setAnimationSpeed(parseInt(e.target.value))} 
-                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-500" 
-                      />
-                      <div className="text-xs text-gray-500 text-center mt-1">{animationSpeed}ms</div>
-                    </div>
                     <div className="flex gap-3 pt-2">
                       <button 
-                        onClick={() => animateProcess(false)} 
-                        disabled={isAnimating || isDecrypting} 
+                        onClick={() => startProcess(false)} 
+                        disabled={isDecrypting} 
                         className={`flex-1 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-all flex items-center justify-center shadow-lg hover:shadow-purple-500/20 ${isDecrypting ? 'opacity-50' : ''}`}
                       >
-                        {isAnimating && !isDecrypting ? <><Pause className="w-5 h-5 mr-2" /> Animating...</> : <><Play className="w-5 h-5 mr-2" /> Encrypt</>}
+                        <><Play className="w-5 h-5 mr-2" /> Encryption</>
                       </button>
                       <button 
-                        onClick={() => animateProcess(true)} 
-                        disabled={isAnimating || !isDecrypting} 
+                        onClick={() => startProcess(true)} 
+                        disabled={!isDecrypting} 
                         className={`flex-1 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-all flex items-center justify-center shadow-lg hover:shadow-blue-500/20 ${!isDecrypting ? 'opacity-50' : ''}`}
                       >
-                        {isAnimating && isDecrypting ? <><Pause className="w-5 h-5 mr-2" /> Animating...</> : <><Play className="w-5 h-5 mr-2" /> Decrypt</>}
+                        <><Play className="w-5 h-5 mr-2" /> Decryption</>
                       </button>
                       <button 
                         onClick={() => {
@@ -552,7 +667,7 @@ const Salsa20Interactive = () => {
                             setInput("This is a secret message.");
                           }
                           setIsDecrypting(!isDecrypting);
-                          resetVisualization(true);
+                          resetVisualization();
                         }} 
                         className="bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium p-3 rounded-lg transition-all flex items-center justify-center"
                         title={isDecrypting ? "Switch to Encryption" : "Switch to Decryption"}
@@ -560,7 +675,7 @@ const Salsa20Interactive = () => {
                         <ArrowRight className="w-5 h-5" />
                       </button>
                       <button 
-                        onClick={() => resetVisualization(true)} 
+                        onClick={() => resetVisualization()} 
                         title="Reset" 
                         className="bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium p-3 rounded-lg transition-all"
                       >
@@ -624,12 +739,13 @@ const Salsa20Interactive = () => {
                         </div>
                       </div>
                       <div>
-                        <h3 className="text-lg font-semibold text-orange-600 mb-3">Algorithm Steps</h3>
+                        <h3 className="text-lg font-semibold text-orange-600 mb-3">Algorithm Steps (Click to Navigate)</h3>
                         <div className="space-y-2">
                           {steps.map((step, index) => (
                             <div 
                               key={index} 
-                              className={`p-3 rounded-lg border-l-4 transition-all duration-300 text-sm ${currentStep >= index ? "bg-gray-100 border-purple-400 text-gray-900" : "bg-gray-50 border-gray-300 text-gray-600"} ${currentStep === index ? "scale-105 shadow-lg shadow-purple-500/10" : ""}`}
+                              onClick={() => navigateToStep(index)}
+                              className={`p-3 rounded-lg border-l-4 transition-all duration-300 text-sm cursor-pointer hover:shadow-md ${currentStep >= index ? "bg-gray-100 border-purple-400 text-gray-900" : "bg-gray-50 border-gray-300 text-gray-600 hover:bg-gray-100"} ${currentStep === index ? "scale-105 shadow-lg shadow-purple-500/10 ring-2 ring-purple-200" : ""}`}
                             >
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center">
@@ -638,13 +754,51 @@ const Salsa20Interactive = () => {
                                   </div>
                                   <span>{step}</span>
                                 </div>
-                                {currentStep === index && isAnimating && (
-                                  <div className="ml-3 w-3 h-3 bg-green-400 rounded-full animate-ping"></div>
+                                {currentStep === index && (
+                                  <div className="ml-3 w-3 h-3 bg-green-400 rounded-full"></div>
                                 )}
                               </div>
                             </div>
                           ))}
                         </div>
+                        
+                        {/* Mixing Round Navigation - shown only when in step 1 */}
+                        {currentStep === 1 && stepData.mixingStates.length > 0 && (
+                          <div className="mt-4">
+                            <h4 className="text-md font-semibold text-blue-600 mb-3">Mixing Rounds (Click to Navigate)</h4>
+                            <div className="grid grid-cols-5 gap-1 text-xs">
+                              {stepData.mixingStates.map((_, index) => {
+                                let roundLabel;
+                                let roundType;
+                                if (index === 0) {
+                                  roundLabel = "Initial";
+                                  roundType = "initial";
+                                } else if (index % 2 === 1) {
+                                  roundLabel = `C${Math.ceil(index / 2)}`;
+                                  roundType = "column";
+                                } else {
+                                  roundLabel = `D${index / 2}`;
+                                  roundType = "diagonal";
+                                }
+                                
+                                return (
+                                  <button
+                                    key={index}
+                                    onClick={() => navigateToMixingRound(index)}
+                                    className={`p-2 rounded text-xs font-medium transition-all ${
+                                      currentMixingRound === index
+                                        ? "bg-purple-600 text-white shadow-md"
+                                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                                    }`}
+                                    title={`${roundType === 'initial' ? 'Initial State' : roundType === 'column' ? 'Column Round' : 'Diagonal Round'} ${roundType !== 'initial' ? Math.ceil(index / 2) : ''}`}
+                                  >
+                                    {roundLabel}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                     <CoreMixingVisualizer 
